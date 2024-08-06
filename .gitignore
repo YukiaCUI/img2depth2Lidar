@@ -160,6 +160,14 @@ cython_debug/
 .idea/
 
 .vscode/
-.prepration/
-.prepration/taming-transformers/
+prepration/
+prepration/taming-transformers/
 *.ckpt
+
+# Depth-Anything-V2
+Depth-Anything-V2/depth_KITTI_360/
+Depth-Anything-V2/KITTI-360/
+
+# LiDAR-Diffusion
+LiDAR-Diffusion/dataset/
+LiDAR-Diffusion/models/lidm/kitti/cam2lidar/samples

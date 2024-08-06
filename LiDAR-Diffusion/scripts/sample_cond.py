@@ -82,6 +82,7 @@ def run(model, dataloader, imglogdir, pcdlogdir, nplog=None, config=None, verbos
         logs = model.log_images(batch, N=N, split='val', **log_config)
         n_saved = save_logs(logs, imglogdir, pcdlogdir, N, n_saved=n_saved, config=config)
         all_samples.extend([custom_to_pcd(img, config)[0].astype(np.float32) for img in logs["samples"]])
+        break
     joblib.dump(all_samples, os.path.join(nplog, f"samples.pcd"))
 
     print(f"Sampling of {n_saved} images finished in {(time.time() - tstart) / 60.:.2f} minutes.")
@@ -205,7 +206,8 @@ def get_parser():
 def load_model_from_config(config, sd):
     model = instantiate_from_config(config)
     model.load_state_dict(sd, strict=False)
-    model.cuda()
+    # TODO: uncomment for GPU
+    # model.cuda()
     model.eval()
     return model
 

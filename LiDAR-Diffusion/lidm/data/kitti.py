@@ -33,7 +33,7 @@ CAM_KITTI360_TRAIN_SET = ['00', '04', '05', '06', '07', '08', '09', '10']  # cam
 
 # validation
 SEM_KITTI_VAL_SET = KITTI_VAL_SET = ['08']
-CAM_KITTI360_VAL_SET = KITTI360_VAL_SET = ['03']
+CAM_KITTI360_VAL_SET = KITTI360_VAL_SET = ['00']
 
 
 class KITTIBase(DatasetBase):
