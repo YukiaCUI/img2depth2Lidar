@@ -106,6 +106,9 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
         else:
             perceptual_loss = torch.tensor(0.0)
 
+        # TODO: add normal loss
+        
+
         # overall reconstruction loss
         rec_loss = (pixel_rec_loss + mask_rec_loss + geo_rec_loss + perceptual_loss) / self.rec_scale
         nll_loss = rec_loss

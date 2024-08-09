@@ -157,7 +157,7 @@ class VQModel(pl.LightningModule):
         # try not to fool the heuristics
         x = self.get_input(batch, self.image_key)
         m = self.get_mask(batch) if self.use_mask else None
-        x_rec, qloss, ind = self(x, return_pred_indices=True)
+        x_rec, qloss, ind = self(x, return_pred_indices=True) # forward
 
         if optimizer_idx == 0:
             # autoencoder
