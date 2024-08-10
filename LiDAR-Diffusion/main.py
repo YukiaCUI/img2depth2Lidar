@@ -562,13 +562,15 @@ if __name__ == "__main__":
         # trainer and callbacks
         trainer_kwargs = dict()
 
+        
+
         # default logger configs
         default_logger_cfgs = {
             "wandb": {
                 "target": "pytorch_lightning.loggers.WandbLogger",
                 "params": {
                     "project": f"lidar_diffusion_{dataset_name}",
-                    "entity": "hancyran",
+                    "entity": "cuiyujie",
                     "name": nowname,
                     "save_dir": logdir,
                     "offline": opt.debug,
@@ -583,7 +585,7 @@ if __name__ == "__main__":
                 }
             },
         }
-        default_logger_cfg = default_logger_cfgs["wandb"]
+        default_logger_cfg = default_logger_cfgs["testtube"]
         if "logger" in lightning_config:
             logger_cfg = lightning_config.logger
         else:
