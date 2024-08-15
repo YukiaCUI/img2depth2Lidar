@@ -79,6 +79,32 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
         d_weight = d_weight * self.discriminator_weight
         return d_weight
 
+    # TODO: compute normal map
+    def compute_normals(self, depth_map):
+        # Calculate gradients along x and y directions
+        grad_x = torch.diff(depth_map, dim=3, prepend=depth_map[:, :, :, :1])
+        grad_y = torch.diff(depth_map, dim=2, prepend=depth_map[:, :, :1, :])
+
+        # Normalize gradients to obtain normals
+        normal_x = -grad_x
+        normal_y = -grad_y
+        normal_z = torch.ones_like(grad_x)  # Depth component
+
+        # Stack and normalize normals
+        normals = torch.cat((normal_x, normal_y, normal_z), dim=1)  # Shape (N, 3, H, W)
+        norms = torch.sqrt(torch.sum(normals ** 2, dim=1, keepdim=True))  # Compute norms
+        normals = normals / (norms + 1e-8)  # Normalize and prevent division by zero
+        return normals
+    
+    # TODO: normal loss
+    def normal_loss(self, input_normals, rec_normals):
+        # Cosine similarity loss
+        dot_product = torch.sum(input_normals * rec_normals, dim=1)  # Dot product along normal channels
+        loss = torch.mean(1 - dot_product)  # 1 - cosine similarity
+        return loss
+
+
+
     def forward(self, codebook_loss, inputs, reconstructions, optimizer_idx,
                 global_step, last_layer=None, cond=None, split="train", predicted_indices=None, masks=None):
         input_coord = self.geometry_converter(inputs)
@@ -107,7 +133,13 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
             perceptual_loss = torch.tensor(0.0)
 
         # TODO: add normal loss
-        
+        # Inputs shape: torch.Size([32, 1, 64, 1024])
+        # Reconstructions shape: torch.Size([32, 1, 64, 1024])
+
+        input_normals = self.compute_normals(inputs)
+        rec_normals = self.compute_normals(reconstructions)
+        normal_loss_value_cos = self.normal_loss(input_normals, rec_normals)
+        normal_loss_value_l = self.pixel_loss(input_normals, rec_normals)
 
         # overall reconstruction loss
         rec_loss = (pixel_rec_loss + mask_rec_loss + geo_rec_loss + perceptual_loss) / self.rec_scale
@@ -145,7 +177,10 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
                    "{}/perceptual_loss".format(split): perceptual_loss.detach().mean(),
                    "{}/d_weight".format(split): d_weight.detach(),
                    "{}/disc_factor".format(split): torch.tensor(disc_factor),
-                   "{}/g_loss".format(split): g_loss.detach().mean()}
+                   "{}/g_loss".format(split): g_loss.detach().mean(),
+                   "{}/normal_loss".format(split): normal_loss_value_cos.detach().mean(),
+                   "{}/normal_loss".format(split): normal_loss_value_l.detach().mean()
+                   }
 
             if predicted_indices is not None:
                 assert self.n_classes is not None
