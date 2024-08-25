@@ -5,6 +5,7 @@ from . import weights_init, l1, l2, hinge_d_loss, vanilla_d_loss, measure_perple
 from .geometric import GeoConverter
 from .discriminator import NLayerDiscriminator, LiDARNLayerDiscriminator, LiDARNLayerDiscriminatorV2
 from .perceptual import PerceptualLoss
+from .curvature import Curvature
 
 VERSION2DISC = {'v0': NLayerDiscriminator, 'v1': LiDARNLayerDiscriminator, 'v2': LiDARNLayerDiscriminatorV2}
 
@@ -66,6 +67,9 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
         self.geometry_converter = GeoConverter(curve_length, False, dataset_config)  # force converting xyz output
         self.geo_loss = square_dist_loss
 
+        # TODO: add curvature loss
+        self.curvature_maker= Curvature(dataset_config)
+
     def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer=None):
         if last_layer is not None:
             nll_grads = torch.autograd.grad(nll_loss, last_layer, retain_graph=True)[0]
@@ -78,32 +82,35 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
         d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
         d_weight = d_weight * self.discriminator_weight
         return d_weight
-
-    # TODO: compute normal map
-    def compute_normals(self, depth_map):
-        # Calculate gradients along x and y directions
-        grad_x = torch.diff(depth_map, dim=3, prepend=depth_map[:, :, :, :1])
-        grad_y = torch.diff(depth_map, dim=2, prepend=depth_map[:, :, :1, :])
-
-        # Normalize gradients to obtain normals
-        normal_x = -grad_x
-        normal_y = -grad_y
-        normal_z = torch.ones_like(grad_x)  # Depth component
-
-        # Stack and normalize normals
-        normals = torch.cat((normal_x, normal_y, normal_z), dim=1)  # Shape (N, 3, H, W)
-        norms = torch.sqrt(torch.sum(normals ** 2, dim=1, keepdim=True))  # Compute norms
-        normals = normals / (norms + 1e-8)  # Normalize and prevent division by zero
-        return normals
     
-    # TODO: normal loss
-    def normal_loss(self, input_normals, rec_normals):
-        # Cosine similarity loss
-        dot_product = torch.sum(input_normals * rec_normals, dim=1)  # Dot product along normal channels
-        loss = torch.mean(1 - dot_product)  # 1 - cosine similarity
+    def cur_loss(self, input_curvature, rec_curvature):
+        # 确保输入张量的形状一致
+        assert input_curvature.shape == rec_curvature.shape, "Input and reconstruction curvature must have the same shape."
+
+        # 创建一个掩码，标记需要排除的点
+        B, C, H, W = input_curvature.shape
+        mask = torch.ones((B, C, H, W), dtype=torch.bool, device=input_curvature.device)
+
+        # 排除前5和后5个元素
+        mask[:, :, :, :5] = 0
+        mask[:, :, :, -5:] = 0
+
+        # 检查是否有无穷大值
+        inf_mask = (input_curvature == float('inf')) | (rec_curvature == float('inf'))
+        mask = mask & ~inf_mask  # 组合掩码，排除无穷大值的点
+
+        # 计算有效的曲率差异
+        valid_input_curvature = input_curvature[mask]
+        valid_rec_curvature = rec_curvature[mask]
+
+        # 计算损失，使用 L1 损失
+        if valid_input_curvature.numel() > 0:  # 确保有效点存在
+            loss = l1(valid_input_curvature, valid_rec_curvature)
+            
+        else:
+            loss = torch.tensor(0.0, device=input_curvature.device)  # 如果没有有效点，损失为0, 没有 grad_fn 的张量, 不参与梯度传播
+
         return loss
-
-
 
     def forward(self, codebook_loss, inputs, reconstructions, optimizer_idx,
                 global_step, last_layer=None, cond=None, split="train", predicted_indices=None, masks=None):
@@ -132,16 +139,20 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
         else:
             perceptual_loss = torch.tensor(0.0)
 
-        # TODO: add normal loss
         # Inputs shape: torch.Size([32, 1, 64, 1024])
         # Reconstructions shape: torch.Size([32, 1, 64, 1024])
+        # TODO: add curve loss
+        input_curvature = self.curvature_maker(inputs)
+        rec_curvature = self.curvature_maker(reconstructions[:, 0:1].contiguous())
+        curve_loss = self.cur_loss(input_curvature, rec_curvature)
+        
+        print(f"Curve loss.shape: {curve_loss.shape}")
 
-        input_normals = self.compute_normals(inputs)
-        rec_normals = self.compute_normals(reconstructions)
-        normal_loss_value_cos = self.normal_loss(input_normals, rec_normals)
-        normal_loss_value_l = self.pixel_loss(input_normals, rec_normals)
+        curve_loss = curve_loss.mean()
+        print('curve_loss:', curve_loss)
 
         # overall reconstruction loss
+        # rec_loss = (pixel_rec_loss + mask_rec_loss + geo_rec_loss + perceptual_loss) / self.rec_scale
         rec_loss = (pixel_rec_loss + mask_rec_loss + geo_rec_loss + perceptual_loss) / self.rec_scale
         nll_loss = rec_loss
         nll_loss = torch.mean(nll_loss)
@@ -166,7 +177,7 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
                 assert not self.training
                 d_weight = torch.tensor(0.0)
 
-            loss = nll_loss + d_weight * disc_factor * g_loss + self.codebook_weight * codebook_loss.mean()
+            loss = nll_loss + d_weight * disc_factor * g_loss + self.codebook_weight * codebook_loss.mean() + curve_loss * 0.001
 
             log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
                    "{}/quant_loss".format(split): codebook_loss.detach().mean(),
@@ -178,8 +189,7 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
                    "{}/d_weight".format(split): d_weight.detach(),
                    "{}/disc_factor".format(split): torch.tensor(disc_factor),
                    "{}/g_loss".format(split): g_loss.detach().mean(),
-                   "{}/normal_loss".format(split): normal_loss_value_cos.detach().mean(),
-                   "{}/normal_loss".format(split): normal_loss_value_l.detach().mean()
+                   "{}/curve_loss".format(split): curve_loss.detach().mean()
                    }
 
             if predicted_indices is not None:
