@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+import os
 
 from . import weights_init, l1, l2, hinge_d_loss, vanilla_d_loss, measure_perplexity, square_dist_loss
 from .geometric import GeoConverter
@@ -24,6 +25,9 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
         self.pixel_weight = pixelloss_weight
         self.mask_factor = mask_factor
         self.geo_factor = geo_factor
+
+        # TODO:
+        self.dataset_config = dataset_config
 
         # scale of reconstruction loss
         self.rec_scale = 1
@@ -68,7 +72,7 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
         self.geo_loss = square_dist_loss
 
         # TODO: add curvature loss
-        self.curvature_maker= Curvature(dataset_config)
+        self.curvature_maker= None
 
     def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer=None):
         if last_layer is not None:
@@ -142,14 +146,25 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
         # Inputs shape: torch.Size([32, 1, 64, 1024])
         # Reconstructions shape: torch.Size([32, 1, 64, 1024])
         # TODO: add curve loss
+        self.curvature_maker= Curvature(self.dataset_config) # 实例化
+
         input_curvature = self.curvature_maker(inputs)
         rec_curvature = self.curvature_maker(reconstructions[:, 0:1].contiguous())
-        curve_loss = self.cur_loss(input_curvature, rec_curvature)
-        
-        print(f"Curve loss.shape: {curve_loss.shape}")
 
-        curve_loss = curve_loss.mean()
-        print('curve_loss:', curve_loss)
+        # TODO：
+        threshold = 0.03
+        valid_mask = torch.isfinite(input_curvature) & (input_curvature < threshold)
+
+        filtered_input_curvature = torch.where(valid_mask, input_curvature, torch.tensor(0.0).to(input_curvature.device))
+        filtered_rec_curvature = torch.where(valid_mask, rec_curvature, torch.tensor(0.0).to(rec_curvature.device))
+
+        curve_loss = self.cur_loss(filtered_input_curvature, filtered_rec_curvature)
+        valid_curve_loss = curve_loss[curve_loss != 0]
+
+        if valid_curve_loss.numel() > 0:
+            curve_loss_mean = valid_curve_loss.mean()
+        else:
+            curve_loss_mean = torch.tensor(0.0)
 
         # overall reconstruction loss
         # rec_loss = (pixel_rec_loss + mask_rec_loss + geo_rec_loss + perceptual_loss) / self.rec_scale
@@ -175,9 +190,15 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
                 d_weight = self.calculate_adaptive_weight(nll_loss, g_loss, last_layer=last_layer)
             except RuntimeError:
                 assert not self.training
-                d_weight = torch.tensor(0.0)
+                d_weight = torch.tensor(0.0) 
 
-            loss = nll_loss + d_weight * disc_factor * g_loss + self.codebook_weight * codebook_loss.mean() + curve_loss * 0.001
+            loss = nll_loss + d_weight * disc_factor * g_loss + self.codebook_weight * codebook_loss.mean()
+
+            # TODO: add curvature loss
+            if loss < 0.05:
+                loss += curve_loss_mean * 0.1
+            loss += curve_loss_mean
+
 
             log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
                    "{}/quant_loss".format(split): codebook_loss.detach().mean(),

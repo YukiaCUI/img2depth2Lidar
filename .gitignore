@@ -171,3 +171,4 @@ Depth-Anything-V2/KITTI-360/
 # LiDAR-Diffusion
 LiDAR-Diffusion/dataset/
 LiDAR-Diffusion/models/lidm/kitti/cam2lidar/samples
+LiDAR-Diffusion/
