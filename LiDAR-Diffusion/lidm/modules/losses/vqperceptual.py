@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import os
+import numpy as np
 
 from . import weights_init, l1, l2, hinge_d_loss, vanilla_d_loss, measure_perplexity, square_dist_loss
 from .geometric import GeoConverter
@@ -151,23 +152,60 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
         input_curvature = self.curvature_maker(inputs)
         rec_curvature = self.curvature_maker(reconstructions[:, 0:1].contiguous())
 
+        # TODO:
+        input_curvature_np = input_curvature.cpu().detach().numpy()
+        # 保存到 txt 文件
+        with open('curvature_values.txt', 'w') as f:
+            f.write("Input Curvature:\n")
+            for tensor_slice in input_curvature_np:
+                f.write(f"{tensor_slice}\n")
+
+        print("Curvature values saved to curvature_values.txt")
+
+ 
         # TODO：
-        threshold = 0.03
-        valid_mask = torch.isfinite(input_curvature) & (input_curvature < threshold)
+        threshold = 0.01
+        valid_mask = torch.isfinite(input_curvature) & (input_curvature < threshold)    
 
-        filtered_input_curvature = torch.where(valid_mask, input_curvature, torch.tensor(0.0).to(input_curvature.device))
-        filtered_rec_curvature = torch.where(valid_mask, rec_curvature, torch.tensor(0.0).to(rec_curvature.device))
+        # filtered_input_curvature = torch.where(valid_mask, input_curvature, torch.tensor(0.0).to(input_curvature.device))
+        # filtered_rec_curvature = torch.where(valid_mask, rec_curvature, torch.tensor(0.0).to(rec_curvature.device))
 
-        curve_loss = self.cur_loss(filtered_input_curvature, filtered_rec_curvature)
-        valid_curve_loss = curve_loss[curve_loss != 0]
+        filtered_input_curvature = input_curvature[valid_mask == 1]
+        filtered_rec_curvature = rec_curvature[valid_mask == 1]
 
-        if valid_curve_loss.numel() > 0:
-            curve_loss_mean = valid_curve_loss.mean()
+        # 创建非零掩码，筛掉两个张量中都为 0 的值
+        non_zero_mask = (filtered_input_curvature != 0) & (filtered_rec_curvature != 0)
+
+        # 筛选非零值
+        final_input_curvature = filtered_input_curvature[non_zero_mask]
+        final_rec_curvature = filtered_rec_curvature[non_zero_mask]
+        
+        curve_loss = self.pixel_loss(final_input_curvature, final_rec_curvature)
+
+        # curve_loss = self.cur_loss(filtered_input_curvature, filtered_rec_curvature)
+        # valid_curve_loss = curve_loss[curve_loss != 0]
+
+        if curve_loss.numel() > 0:
+            curve_loss_mean = curve_loss.mean()
         else:
             curve_loss_mean = torch.tensor(0.0)
 
+        # # 将 inputs 和 valid_mask 保存为 txt 文件
+        # for i in range(inputs.shape[0]):  # 遍历每个样本
+        #     input_data = inputs[i, 0].cpu().detach().numpy().reshape(64, 1024)  # 获取当前样本数据并转为 2D numpy 数组
+        #     mask_data = valid_mask[i].cpu().detach().numpy().reshape(64, 1024)  # 获取当前样本的有效掩码并转为 2D numpy 数组
+            
+        #     # 保存输入数据
+        #     input_file_path = f'input_{i}.txt'
+        #     np.savetxt(input_file_path, input_data, fmt='%.6f')  # 保存输入数据为 txt 文件，保留小数点后六位
+        #     print(f'Saved input data to: {input_file_path}')  # 输出保存位置
+
+        #     # 保存有效掩码
+        #     mask_file_path = f'mask_{i}.txt'
+        #     np.savetxt(mask_file_path, mask_data, fmt='%d')  # 保存有效掩码为 txt 文件，数据格式为整数
+        #     print(f'Saved mask data to: {mask_file_path}')  # 输出保存位置
+
         # overall reconstruction loss
-        # rec_loss = (pixel_rec_loss + mask_rec_loss + geo_rec_loss + perceptual_loss) / self.rec_scale
         rec_loss = (pixel_rec_loss + mask_rec_loss + geo_rec_loss + perceptual_loss) / self.rec_scale
         nll_loss = rec_loss
         nll_loss = torch.mean(nll_loss)
@@ -195,8 +233,8 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
             loss = nll_loss + d_weight * disc_factor * g_loss + self.codebook_weight * codebook_loss.mean()
 
             # TODO: add curvature loss
-            if loss < 0.05:
-                loss += curve_loss_mean * 0.1
+            # if loss < 0.05:
+            #     loss += curve_loss_mean
             loss += curve_loss_mean
 
 

@@ -252,6 +252,10 @@ class FrozenClipMultiImageEmbedder(FrozenClipImageEmbedder):
 
         with torch.no_grad():
             img_feats = [self.model.encode_image(self.preprocess(img))[:, None] for img in x]
+            
+            #TODO: add depth
+            torch.load('depth.pt')
+            
             x = torch.cat(img_feats, 1).float() + self.view_embedding
             x = self.linear(x)
 
