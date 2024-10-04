@@ -4,9 +4,10 @@ from functools import partial
 import clip
 from einops import rearrange, repeat
 import kornia
+from transformers import pipeline
 
 from ...modules.x_transformer import Encoder, TransformerWrapper
-
+from DepthAnythingV2.dpt import DepthAnythingV2
 
 class AbstractEncoder(nn.Module):
     def __init__(self):
@@ -202,7 +203,7 @@ class FrozenClipImageEmbedder(nn.Module):
         super().__init__()
         self.model, _ = clip.load(name=model, device='cpu', jit=jit)
         self.init()
-
+        self.device = device
         self.antialias = antialias
 
         self.register_buffer('mean', torch.Tensor([0.48145466, 0.4578275, 0.40821073]), persistent=False)
@@ -240,6 +241,22 @@ class FrozenClipMultiImageEmbedder(FrozenClipImageEmbedder):
         self.linear = nn.Linear(img_dim, out_dim)
         self.view_embedding = nn.Parameter(img_dim ** -0.5 * torch.randn((1, num_views * split_per_view, img_dim)))
 
+    def depth_anything_encode(self, x):
+        model_configs = {
+            'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+            'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
+            'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
+            'vitg': {'encoder': 'vitg', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
+        }
+        encoder = 'vitl'
+        model = DepthAnythingV2(**model_configs[encoder]).to(self.device)
+        model.load_state_dict(torch.load(f'Depth_Anything_V2/checkpoints/depth_anything_v2_{encoder}.pth', map_location=self.device))
+        self.model.to(self.device)
+        x = x.to(self.device)
+        with torch.no_grad():
+            img_depth_feat = model.pretrained(x)
+        return img_depth_feat
+
     def forward(self, x):
         # x is assumed to be in range [0,1]
         if isinstance(x, torch.Tensor) and x.ndim == 5:
@@ -252,10 +269,15 @@ class FrozenClipMultiImageEmbedder(FrozenClipImageEmbedder):
 
         with torch.no_grad():
             img_feats = [self.model.encode_image(self.preprocess(img))[:, None] for img in x]
-            
+
+            # img_feats shape (batch_size, 1, 768)
+            # x shape (batch_size, 3, 376, 352)
+            # process_input_shape (batch_size, 3, 224, 224)
+
             #TODO: add depth
-            torch.load('depth.pt')
-            
+            img_depth_feat = [self.depth_anything_encode(self.preprocess(img))[:, None] for img in x]
+            print(img_depth_feat[0].shape)
+
             x = torch.cat(img_feats, 1).float() + self.view_embedding
             x = self.linear(x)
 

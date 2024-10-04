@@ -153,25 +153,30 @@ class VQGeoLPIPSWithDiscriminator(nn.Module):
         rec_curvature = self.curvature_maker(reconstructions[:, 0:1].contiguous())
 
         # TODO:
-        input_curvature_np = input_curvature.cpu().detach().numpy()
-        # 保存到 txt 文件
-        with open('curvature_values.txt', 'w') as f:
-            f.write("Input Curvature:\n")
-            for tensor_slice in input_curvature_np:
-                f.write(f"{tensor_slice}\n")
+        # input_curvature_np = input_curvature.cpu().detach().numpy()
+        # # 保存到 txt 文件
+        # with open('curvature_values.txt', 'w') as f:
+        #     f.write("Input Curvature:\n")
+        #     for tensor_slice in input_curvature_np:
+        #         f.write(f"{tensor_slice}\n")
 
-        print("Curvature values saved to curvature_values.txt")
+        # print("Curvature values saved to curvature_values.txt")
 
  
         # TODO：
         threshold = 0.01
         valid_mask = torch.isfinite(input_curvature) & (input_curvature < threshold)    
 
-        # filtered_input_curvature = torch.where(valid_mask, input_curvature, torch.tensor(0.0).to(input_curvature.device))
-        # filtered_rec_curvature = torch.where(valid_mask, rec_curvature, torch.tensor(0.0).to(rec_curvature.device))
+        # 创建fake_mask，进行实验
+        B, C, H, W = input_curvature.shape
+        fake_mask = torch.hstack([torch.ones((H, int(W/2))), torch.zeros((H, int(W/2)))])
+        fake_mask = fake_mask.repeat(B, C, 1, 1)
+        filtered_input_curvature = input_curvature[fake_mask == 1] 
+        filtered_rec_curvature = rec_curvature[fake_mask == 1]
 
-        filtered_input_curvature = input_curvature[valid_mask == 1]
-        filtered_rec_curvature = rec_curvature[valid_mask == 1]
+
+        # filtered_input_curvature = input_curvature[valid_mask == 1]
+        # filtered_rec_curvature = rec_curvature[valid_mask == 1]
 
         # 创建非零掩码，筛掉两个张量中都为 0 的值
         non_zero_mask = (filtered_input_curvature != 0) & (filtered_rec_curvature != 0)
