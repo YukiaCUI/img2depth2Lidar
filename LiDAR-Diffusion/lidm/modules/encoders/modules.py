@@ -7,7 +7,7 @@ import kornia
 from transformers import pipeline
 
 from ...modules.x_transformer import Encoder, TransformerWrapper
-from DepthAnythingV2.dpt import DepthAnythingV2
+from Depth_Anything_V2.depth_anything_v2.dpt import DepthAnythingV2
 
 class AbstractEncoder(nn.Module):
     def __init__(self):
@@ -234,12 +234,13 @@ class FrozenClipMultiImageEmbedder(FrozenClipImageEmbedder):
     Uses the CLIP image encoder with multi-image as input.
     """
 
-    def __init__(self, num_views=1, split_per_view=1, img_dim=768, out_dim=512, key='camera', **kwargs):
+    def __init__(self, num_views=1, split_per_view=1, img_dim=1792, out_dim=1024, key='camera', **kwargs):
         super().__init__(**kwargs)
         self.split_per_view = split_per_view
         self.key = key
         self.linear = nn.Linear(img_dim, out_dim)
         self.view_embedding = nn.Parameter(img_dim ** -0.5 * torch.randn((1, num_views * split_per_view, img_dim)))
+    
 
     def depth_anything_encode(self, x):
         model_configs = {
@@ -268,19 +269,27 @@ class FrozenClipMultiImageEmbedder(FrozenClipImageEmbedder):
             return x
 
         with torch.no_grad():
-            img_feats = [self.model.encode_image(self.preprocess(img))[:, None] for img in x]
-
-            # img_feats shape (batch_size, 1, 768)
+            img_clip_feats = [self.model.encode_image(self.preprocess(img))[:, None] for img in x]
+            
+            # img_clip_feats shape (batch_size, 1, 768)
+            # img_deprh_feats shape (batch_size, 1, 1024)
             # x shape (batch_size, 3, 376, 352)
             # process_input_shape (batch_size, 3, 224, 224)
 
             #TODO: add depth
-            img_depth_feat = [self.depth_anything_encode(self.preprocess(img))[:, None] for img in x]
-            print(img_depth_feat[0].shape)
+            img_depth_feats = [self.depth_anything_encode(self.preprocess(img))[:, None] for img in x]
+            combined_feats = torch.cat((img_clip_feats, img_depth_feats), -1)
 
-            x = torch.cat(img_feats, 1).float() + self.view_embedding
-            x = self.linear(x)
+            # print("combined_shape:", combined_feats[0].shape)
+            # combined_feats shape (batch_size, 1, 1792)
+            
+            x = torch.cat(combined_feats, 1).float() + self.view_embedding
+            # print("x_shape:", x.shape)
+            # x shape (batch_size, 4, 1792)
 
+        
+        x = self.linear(x)
+            
         return x
 
 
